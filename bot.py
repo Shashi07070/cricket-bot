@@ -92,8 +92,8 @@ def _fmt_stats(stats: dict, title: str) -> str:
             f"  {label}: {d['total']} alerts | {d['won']} won | {d['pct']}%"
         )
 
-    bs = stats["by_session"]
-    be = stats["by_event"]
+    bs   = stats["by_session"]
+    be   = stats["by_event"]
     bsig = stats["by_signal"]
 
     lines = [
@@ -186,7 +186,9 @@ def handle_group_message(message: telebot.types.Message):
                         alert_id, signal["signal"], signal["session"],
                     )
                 except Exception:
-                    logger.error("Failed to save/send alert:\n%s", traceback.format_exc())
+                    logger.error(
+                        "Failed to save/send alert:\n%s", traceback.format_exc()
+                    )
 
         # --- End of over? Auto-resolve ---
         if parsed.get("type") == "end_over":
@@ -270,7 +272,11 @@ def cmd_reset(message: telebot.types.Message):
     state    = get_state(chat_id)
     match_id = state.match_id
     state.reset(match_id=match_id)
-    bot.reply_to(message, f"♻️ State reset. Match ID: `{match_id}`", parse_mode="Markdown")
+    bot.reply_to(
+        message,
+        f"♻️ State reset. Match ID: `{match_id}`",
+        parse_mode="Markdown",
+    )
 
 
 @bot.message_handler(commands=["status"])
