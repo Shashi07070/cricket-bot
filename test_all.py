@@ -385,9 +385,9 @@ class TestEngine:
 
     def test_signal_wicket_yes_over(self):
         """
-        Wicket: line 47-48→46-47.
+        Wicket: line 47-48 → 46-47.
         before_mid=47.5, after_mid=46.5, actual=-1.
-        fair≈ -(5 * 0.5 * (6/8.5)) ≈ -1.76
+        fair ≈ -(5 * 0.5 * (6/8.5)) ≈ -1.76
         actual(-1) > fair(-1.76) → YES_OVER
         """
         sig = self._signal_test(
@@ -399,19 +399,18 @@ class TestEngine:
 
     def test_signal_wicket_no_signal_on_exact_move(self):
         """
-        Line moves exactly as fair → deviation = 0 → no signal.
-        Set a large exact movement to make actual ≈ fair.
-        Use tiny RR so fair is close to 0 to hit deviation==0 scenario.
+        Near-zero RR wicket → fair ≈ 0, line doesn't move → actual = 0.
+        Both abs(fair) < 0.5 and abs(actual) < 0.5 → early exit → None.
         """
         s = MatchState()
         s.current_rr = 0.01   # near-zero → wicket_drop ≈ 0
         ev = self._make_event(
             "wicket", tier="tailender", br6=18,
             lb6={"low": 47, "high": 48},
-            la6={"low": 47, "high": 48},   # no movement either
+            la6={"low": 47, "high": 48},   # no movement
         )
         sig = engine.detect_signal(ev, s)
-        # fair ≈ 0, actual = 0 → deviation = 0 → None
+        # fair ≈ 0, actual = 0 → both negligible → None
         assert sig is None
 
     def test_signal_four_not_under(self):
@@ -439,7 +438,13 @@ class TestEngine:
         assert sig["signal"] == "YES_OVER"
 
     def test_signal_three_dots_triggers(self):
-        """3 consecutive dots with small deviation STILL triggers (priority)."""
+        """
+        3 consecutive dots with small deviation STILL triggers (priority).
+        dot: fair=-1, line moves -0.5 (before=47.5, after=47.0)
+        actual=-0.5, deviation=abs(-1 - -0.5)=0.5 → below threshold BUT
+        is_priority=True (dots>=3) → bypasses gate → YES_OVER
+        (actual(-0.5) > fair(-1) → YES_OVER)
+        """
         s = self._make_state(rr=6.0, dots=3)
         ev = self._make_event(
             "dot", br6=18,
@@ -533,7 +538,7 @@ class TestDB:
         assert row["session_end_score"] == 50
 
     def test_get_pending_alerts_filters_by_match_session(self):
-        sig1 = self._sample_signal("YES_OVER", "6over")
+        sig1 = self._sample_signal("YES_OVER",  "6over")
         sig2 = self._sample_signal("NOT_UNDER", "20over")
         db_module.save_alert(sig1, "MATCH01", self.db_path)
         db_module.save_alert(sig2, "MATCH01", self.db_path)
@@ -576,12 +581,11 @@ class TestDB:
         assert len(today) >= 1
 
     def test_get_stats_aggregates(self):
-        # Save 3 alerts, resolve 2 as WIN, 1 as LOSS
+        # Save 3 alerts, resolve all via session
         for _ in range(3):
             sig = self._sample_signal()
-            aid = db_module.save_alert(sig, "M1", self.db_path)
+            db_module.save_alert(sig, "M1", self.db_path)
 
-        # Resolve all 3 via session
         db_module.resolve_session_alerts("M1", "6over", 55, self.db_path)
 
         stats = db_module.get_stats(db_path=self.db_path)
