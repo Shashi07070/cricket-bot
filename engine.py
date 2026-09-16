@@ -40,6 +40,10 @@ WICKET_BASE_DROP = {
 # Deviation threshold for non-priority events
 DEVIATION_THRESHOLD = 2.0
 
+# Minimum meaningful movement — below this in both fair and actual,
+# there is nothing to signal even for priority events
+NEGLIGIBLE_THRESHOLD = 0.5
+
 
 # ---------------------------------------------------------------------------
 # Fair change
@@ -123,17 +127,25 @@ def detect_signal(event: dict, state: MatchState) -> Optional[dict]:
 
     fair > 0 (line should rise):
         actual < fair  → bookie line didn't rise enough → NOT_UNDER
-        actual > fair  → bookie line rose more than fair → YES_OVER
+        actual > fair  → bookie line rose more than expected → YES_OVER
 
     Anti-spam gate
     --------------
     Always emit for: wicket, four, six, consecutive_dots >= 3
     Otherwise only emit when deviation > DEVIATION_THRESHOLD
+
+    Early exit
+    ----------
+    If both fair_change and actual_change are near zero (abs < 0.5),
+    there is nothing meaningful to signal regardless of event type.
     """
     ev_type = event["event"]
     fair = fair_change(event, state)
 
-    # If fair == 0 and not a priority event, no signal
+    # ----------------------------------------------------------------
+    # Priority flag: these event types always bypass the deviation gate.
+    # Evaluated once here so it applies consistently across all sessions.
+    # ----------------------------------------------------------------
     is_priority = (
         ev_type in ("wicket", "four", "six")
         or state.consecutive_dots >= 3
@@ -143,7 +155,7 @@ def detect_signal(event: dict, state: MatchState) -> Optional[dict]:
         line_before = event.get(f"line_before_{session}")
         line_after  = event.get(f"line_after_{session}")
 
-        # Skip if we don't have both snapshots
+        # Skip sessions where we don't have both snapshots
         if line_before is None or line_after is None:
             continue
 
@@ -153,7 +165,26 @@ def detect_signal(event: dict, state: MatchState) -> Optional[dict]:
         actual_change = after_mid - before_mid
         deviation = abs(fair - actual_change)
 
-        # Anti-spam check
+        # ----------------------------------------------------------------
+        # FIX 1 — Early exit when both movements are negligible.
+        #
+        # If fair_change ≈ 0 AND actual_change ≈ 0 there is no meaningful
+        # divergence to act on, even for priority events.  This catches the
+        # case where a near-zero-RR wicket produces fair ≈ 0 and the line
+        # also doesn't move (actual = 0), which previously fell through to
+        # _classify_signal() and incorrectly returned YES_OVER because
+        # actual_change(0) > fair(-0.001) evaluated as True.
+        # ----------------------------------------------------------------
+        if abs(fair) < NEGLIGIBLE_THRESHOLD and abs(actual_change) < NEGLIGIBLE_THRESHOLD:
+            continue  # nothing meaningful in this session; try next
+
+        # ----------------------------------------------------------------
+        # FIX 2 — Priority check runs BEFORE the deviation filter.
+        #
+        # is_priority is already computed above.  Non-priority events are
+        # silenced when deviation <= threshold.  Priority events skip this
+        # gate entirely so consecutive dots / big hits always fire.
+        # ----------------------------------------------------------------
         if not is_priority and deviation <= DEVIATION_THRESHOLD:
             continue
 
