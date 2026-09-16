@@ -64,7 +64,7 @@ nano .env          # fill in BOT_TOKEN and GROUP_ID
 python bot.py
 ```
 
-The bot starts polling Telegram.  Keep this terminal open
+The bot starts polling Telegram. Keep this terminal open
 (or use `nohup python bot.py &` for background).
 
 ---
@@ -177,6 +177,20 @@ balls_factor = balls_remaining_6over / 36
 rr_factor    = current_rr / 8.5
 drop         = base_drop × balls_factor × rr_factor
 fair_change  = −drop
+```
+
+---
+
+## Signal Logic
+
+```
+fair < 0 (line should fall):
+    actual > fair  → YES_OVER   (line didn't fall enough)
+    actual < fair  → NOT_UNDER  (line fell too much)
+
+fair > 0 (line should rise):
+    actual < fair  → NOT_UNDER  (line didn't rise enough)
+    actual > fair  → YES_OVER   (line rose more than expected)
 ```
 
 ---
