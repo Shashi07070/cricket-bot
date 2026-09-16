@@ -279,10 +279,7 @@ class MatchState:
 
         ev = self._build_event_dict(event_label, value)
         self._create_pending(ev)
-        # Return immediately if there are no tracked lines yet
-        # (pending will be completed when next session_line arrives,
-        #  OR we return None here and the engine skips None line_afters)
-        return None   # caller gets result via session_line path
+        return None
 
     def _handle_wicket(self) -> Optional[dict]:
         """Process a wicket."""
