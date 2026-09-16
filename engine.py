@@ -17,14 +17,14 @@ from state import MatchState
 # Per-delivery fair change table (except wicket which uses a formula)
 FAIR_CHANGE_TABLE = {
     "dot":    -1,
-    "run":     0,   # 1 run = neutral
+    "run":     0,   # 1 run = neutral (2/3 handled below)
     "four":   +3,
     "six":    +5,
     "wide":   +1,
     "noball": +2,
 }
 
-# runs value → event override for 2 and 3 run deliveries
+# runs value → extra fair change for 2 and 3 run deliveries
 RUNS_EXTRA_TABLE = {
     2: +1,
     3: +2,
@@ -40,8 +40,7 @@ WICKET_BASE_DROP = {
 # Deviation threshold for non-priority events
 DEVIATION_THRESHOLD = 2.0
 
-# Minimum meaningful movement — below this in both fair and actual,
-# there is nothing to signal even for priority events
+# Negligible movement threshold
 NEGLIGIBLE_THRESHOLD = 0.5
 
 
@@ -53,18 +52,9 @@ def fair_change(event: dict, state: MatchState) -> float:
     """
     Compute the fair line change for the given ball event.
 
-    Parameters
-    ----------
-    event : dict
-        Ball event dict produced by MatchState.update() (via pending).
-    state : MatchState
-        Current match state (used for RR and balls_remaining in wicket formula).
-
-    Returns
-    -------
-    float
-        Expected line movement (positive = line should rise,
-        negative = line should drop).
+    Returns float:
+      positive = line should rise
+      negative = line should drop
     """
     ev_type = event["event"]
 
@@ -87,13 +77,11 @@ def _wicket_fair_change(event: dict, state: MatchState) -> float:
     """
     Wicket fair change formula:
 
-        base_drop      = tier-based constant
-        balls_factor   = balls_remaining_6over / 36
-        rr_factor      = current_rr / 8.5
-        wicket_drop    = base_drop * balls_factor * rr_factor
-        fair_change    = -wicket_drop
-
-    Uses 6over balls_remaining as proxy for session importance.
+        base_drop    = tier-based constant
+        balls_factor = balls_remaining_6over / 36
+        rr_factor    = current_rr / 8.5
+        wicket_drop  = base_drop * balls_factor * rr_factor
+        fair_change  = -wicket_drop
     """
     tier = event.get("next_batsman_tier") or "middle_order"
     base_drop = WICKET_BASE_DROP.get(tier, WICKET_BASE_DROP["middle_order"])
@@ -116,46 +104,41 @@ def detect_signal(event: dict, state: MatchState) -> Optional[dict]:
     """
     Compare fair change vs actual bookie line movement.
 
-    Checks both 6over and 20over sessions.  Returns the FIRST signal
-    found (6over takes priority).  Returns None if no signal.
+    Checks both 6over and 20over sessions.
+    Returns the FIRST signal found (6over takes priority).
+    Returns None if no signal.
 
-    Signal logic
-    ------------
-    fair < 0 (line should fall):
-        actual > fair  → bookie line didn't fall enough → YES_OVER
-        actual < fair  → bookie line fell more than fair → NOT_UNDER
+    Signal logic:
+      fair < 0 (line should fall):
+          actual > fair  → didn't fall enough → YES_OVER
+          actual < fair  → fell more than fair → NOT_UNDER
 
-    fair > 0 (line should rise):
-        actual < fair  → bookie line didn't rise enough → NOT_UNDER
-        actual > fair  → bookie line rose more than expected → YES_OVER
+      fair > 0 (line should rise):
+          actual < fair  → didn't rise enough → NOT_UNDER
+          actual > fair  → rose more than expected → YES_OVER
 
-    Anti-spam gate
-    --------------
-    Always emit for: wicket, four, six, consecutive_dots >= 3
-    Otherwise only emit when deviation > DEVIATION_THRESHOLD
+    Anti-spam:
+      Always emit for: wicket, four, six, consecutive_dots >= 3
+      Otherwise only emit when deviation > DEVIATION_THRESHOLD
 
-    Early exit
-    ----------
-    If both fair_change and actual_change are near zero (abs < 0.5),
-    there is nothing meaningful to signal regardless of event type.
+    Early exit:
+      If both fair_change and actual_change are near zero,
+      there is nothing meaningful to signal regardless of event type.
     """
     ev_type = event["event"]
     fair = fair_change(event, state)
 
-    # ----------------------------------------------------------------
-    # Priority flag: these event types always bypass the deviation gate.
-    # Evaluated once here so it applies consistently across all sessions.
-    # ----------------------------------------------------------------
+    # Priority events always bypass the deviation gate
     is_priority = (
         ev_type in ("wicket", "four", "six")
-        or state.consecutive_dots >= 3
+        or getattr(state, "consecutive_dots", 0) >= 3
     )
 
     for session in ["6over", "20over"]:
         line_before = event.get(f"line_before_{session}")
         line_after  = event.get(f"line_after_{session}")
 
-        # Skip sessions where we don't have both snapshots
+        # Skip sessions without both snapshots
         if line_before is None or line_after is None:
             continue
 
@@ -165,26 +148,11 @@ def detect_signal(event: dict, state: MatchState) -> Optional[dict]:
         actual_change = after_mid - before_mid
         deviation = abs(fair - actual_change)
 
-        # ----------------------------------------------------------------
-        # FIX 1 — Early exit when both movements are negligible.
-        #
-        # If fair_change ≈ 0 AND actual_change ≈ 0 there is no meaningful
-        # divergence to act on, even for priority events.  This catches the
-        # case where a near-zero-RR wicket produces fair ≈ 0 and the line
-        # also doesn't move (actual = 0), which previously fell through to
-        # _classify_signal() and incorrectly returned YES_OVER because
-        # actual_change(0) > fair(-0.001) evaluated as True.
-        # ----------------------------------------------------------------
+        # FIX 1 — Early exit when both movements are negligible
         if abs(fair) < NEGLIGIBLE_THRESHOLD and abs(actual_change) < NEGLIGIBLE_THRESHOLD:
-            continue  # nothing meaningful in this session; try next
+            continue
 
-        # ----------------------------------------------------------------
-        # FIX 2 — Priority check runs BEFORE the deviation filter.
-        #
-        # is_priority is already computed above.  Non-priority events are
-        # silenced when deviation <= threshold.  Priority events skip this
-        # gate entirely so consecutive dots / big hits always fire.
-        # ----------------------------------------------------------------
+        # FIX 2 — Priority check runs BEFORE deviation filter
         if not is_priority and deviation <= DEVIATION_THRESHOLD:
             continue
 
@@ -218,7 +186,6 @@ def detect_signal(event: dict, state: MatchState) -> Optional[dict]:
 def _classify_signal(fair: float, actual_change: float) -> Optional[str]:
     """
     Classify whether a signal exists and what type.
-
     Returns "YES_OVER", "NOT_UNDER", or None.
     """
     if fair == 0:
@@ -227,14 +194,14 @@ def _classify_signal(fair: float, actual_change: float) -> Optional[str]:
     if fair < 0:
         # Line should fall
         if actual_change > fair:
-            return "YES_OVER"   # didn't fall enough → over-value
+            return "YES_OVER"
         if actual_change < fair:
-            return "NOT_UNDER"  # fell too much → under-value
-        return None             # moved exactly as expected
+            return "NOT_UNDER"
+        return None  # moved exactly as expected
 
     # fair > 0: line should rise
     if actual_change < fair:
-        return "NOT_UNDER"  # didn't rise enough
+        return "NOT_UNDER"
     if actual_change > fair:
-        return "YES_OVER"   # rose more than expected
+        return "YES_OVER"
     return None
