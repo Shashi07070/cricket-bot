@@ -157,9 +157,17 @@ def detect_signal(event: dict, state: MatchState) -> Optional[dict]:
             continue
 
         # Determine signal direction
-        signal_type = _classify_signal(fair, actual_change)
-        if signal_type is None:
-            continue
+signal_type = _classify_signal(fair, actual_change)
+
+# Priority events with directional fair change always emit,
+# even if deviation == 0 (line moved as expected). This catches
+# 3+ dot streaks and other momentum signals regardless of bookie
+# response.
+if signal_type is None:
+    if is_priority and fair != 0:
+        signal_type = "YES_OVER" if fair > 0 else "NOT_UNDER"
+    else:
+        continue
 
         return {
             "signal":        signal_type,
